@@ -1,0 +1,63 @@
+name: Android 14 APK Signature
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  signature:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 42
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: android-actions/setup-android@v4
+      - name: Проверить входные APK и сценарий
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          pip install -r requirements.txt
+          sdkmanager 'build-tools;35.0.0' 'platform-tools'
+          python -m unittest discover -s tests -v
+          python scripts/inspect_apks.py 2>&1 | tee results/verify.log
+      - name: Разрешить доступ к KVM
+        id: kvm
+        run: |
+          test -c /dev/kvm
+          sudo chmod 666 /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+      - name: Три опыта через системный установщик
+        id: avd
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          cores: 2
+          ram-size: 2048M
+          disk-size: 4096M
+          force-avd-creation: true
+          emulator-options: -no-window -gpu swiftshader -noaudio -no-boot-anim -no-snapshot -camera-back none -camera-front none
+          script: python scripts/run.py
+      - name: Сформировать отчёт при сбое инфраструктуры
+        if: always()
+        run: |
+          python scripts/report.py 'Проверка APK — ${{ steps.verify.outcome }}. KVM — ${{ steps.kvm.outcome }}. Эмулятор — ${{ steps.avd.outcome }}. Подробности в журнале job.'
+          cat results/README.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Сохранить отчёт и диагностику
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android14-signature-${{ github.run_id }}-${{ github.run_attempt }}
+          path: results/
+          if-no-files-found: error
+          retention-days: 14
